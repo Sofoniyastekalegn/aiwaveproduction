@@ -123,7 +123,7 @@ export default function VideoSection() {
             >
               <iframe 
                 className="w-full h-full"
-                src="https://www.youtube.com/embed/dQw4w9WgXcQ?autoplay=1" 
+                src="https://youtu.be/PTr5T87ViW4?si=4P9E2yTASjnEnbAk" 
                 title="AIWave Introduction Video"
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
                 allowFullScreen
