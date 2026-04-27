@@ -1,0 +1,6 @@
+{
+  "name": "AIWave Agency",
+  "description": "Premium AI Voice Agents and Workflow Automation for modern businesses. Automate calls, bookings, and customer support with ease.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": []
+}
