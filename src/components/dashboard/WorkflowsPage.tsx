@@ -1,501 +1,661 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Plus, Play, Settings, Search, X, ChevronRight,
-  Zap, Database, Mail, Phone, MessageSquare, Globe,
-  Calendar, FileSpreadsheet, Bot, Webhook, GitBranch,
-  Loader2, CheckCircle2, AlertCircle, Trash2, ArrowRight,
-  LayoutGrid, List, ExternalLink,
+  Plus, Play, Search, X, Zap, Database, Mail, Phone,
+  MessageSquare, Globe, Calendar, FileSpreadsheet, Bot,
+  Webhook, GitBranch, Loader2, CheckCircle2, AlertCircle,
+  Trash2, Save, LayoutGrid, Mic, Key,
 } from 'lucide-react';
-import axios from 'axios';
 import { cn } from '../../lib/utils';
+import { INTEGRATIONS, CATEGORIES, getIntegration } from './workflow/integrations';
+import { fetchWorkflows, saveWorkflow, deleteWorkflow, executeWorkflow } from './workflow/workflowService';
+import NodeConfigPanel from './workflow/NodeConfigPanel';
+import type { Workflow, WorkflowNode, WorkflowEdge } from './workflow/types';
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-interface Integration {
-  id: string;
-  name: string;
-  description: string;
-  category: string;
-  icon: React.ReactNode;
-  color: string;
-  badge?: string;
+// ── Icon map ──────────────────────────────────────────────────────────────────
+const ICON_MAP: Record<string, React.ReactNode> = {
+  Bot: <Bot size={16} />, Database: <Database size={16} />, Mail: <Mail size={16} />,
+  Phone: <Phone size={16} />, MessageSquare: <MessageSquare size={16} />, Globe: <Globe size={16} />,
+  Calendar: <Calendar size={16} />, FileSpreadsheet: <FileSpreadsheet size={16} />,
+  Webhook: <Webhook size={16} />, GitBranch: <GitBranch size={16} />, Zap: <Zap size={16} />,
+  LayoutGrid: <LayoutGrid size={16} />, Mic: <Mic size={16} />,
+};
+
+function getIcon(name: string) { return ICON_MAP[name] ?? <Zap size={16} />; }
+
+// ── Seed workflows (shown before Supabase loads) ──────────────────────────────
+function makeSeedWorkflows(): Workflow[] {
+  const now = new Date().toISOString();
+  return [
+    {
+      id: 'local-seed-1', name: 'Medical Spa Appointment', active: true, runs: 142,
+      last_run: '2 mins ago', created_at: now, updated_at: now,
+      nodes: [
+        { id: 'n1', integrationId: 'webhook', label: 'Incoming Call', type: 'trigger', x: 80, y: 200, credentials: {}, configured: true, operation: 'Listen for Events' },
+        { id: 'n2', integrationId: 'n8n-ai-agent', label: 'AI Voice Agent', type: 'action', x: 320, y: 200, credentials: {}, configured: false, operation: 'Run Agent' },
+        { id: 'n3', integrationId: 'supabase', label: 'Save to DB', type: 'action', x: 560, y: 120, credentials: {}, configured: false, operation: 'Insert Row' },
+        { id: 'n4', integrationId: 'gmail', label: 'Send Confirmation', type: 'action', x: 560, y: 280, credentials: {}, configured: false, operation: 'Send Email' },
+      ],
+      edges: [
+        { id: 'e1', sourceNodeId: 'n1', targetNodeId: 'n2' },
+        { id: 'e2', sourceNodeId: 'n2', targetNodeId: 'n3' },
+        { id: 'e3', sourceNodeId: 'n2', targetNodeId: 'n4' },
+      ],
+    },
+    {
+      id: 'local-seed-2', name: 'Lead Qualification', active: false, runs: 87,
+      last_run: '1 hour ago', created_at: now, updated_at: now,
+      nodes: [
+        { id: 'n1', integrationId: 'webhook', label: 'New Lead', type: 'trigger', x: 80, y: 200, credentials: {}, configured: true },
+        { id: 'n2', integrationId: 'openai', label: 'Qualify Lead', type: 'action', x: 320, y: 200, credentials: {}, configured: false },
+        { id: 'n3', integrationId: 'slack', label: 'Notify Team', type: 'action', x: 560, y: 200, credentials: {}, configured: false },
+      ],
+      edges: [
+        { id: 'e1', sourceNodeId: 'n1', targetNodeId: 'n2' },
+        { id: 'e2', sourceNodeId: 'n2', targetNodeId: 'n3' },
+      ],
+    },
+  ];
 }
 
-interface WorkflowNode {
-  id: string;
-  integrationId: string;
-  label: string;
-  type: 'trigger' | 'action' | 'condition';
-  x: number;
-  y: number;
-  icon: React.ReactNode;
-  color: string;
-}
+// ── Canvas Node component ─────────────────────────────────────────────────────
+const NODE_W = 180;
+const NODE_H = 72;
 
-interface Workflow {
-  id: string;
-  name: string;
-  nodes: WorkflowNode[];
-  active: boolean;
-  lastRun?: string;
-  runs: number;
-}
-
-// ── Integration catalog (767 integrations — showing key ones) ─────────────────
-const INTEGRATIONS: Integration[] = [
-  { id: 'n8n-ai-agent', name: 'AI Agent', description: 'Autonomous AI agent node', category: 'AI', icon: <Bot size={18} />, color: '#a855f7', badge: 'Popular' },
-  { id: 'openai', name: 'OpenAI', description: 'GPT-4, DALL·E, Whisper models', category: 'AI', icon: <Bot size={18} />, color: '#10a37f', badge: 'Popular' },
-  { id: 'gemini', name: 'Google Gemini', description: 'Gemini AI assistant & models', category: 'AI', icon: <Bot size={18} />, color: '#4285f4' },
-  { id: 'anthropic', name: 'Anthropic', description: 'Claude models for reasoning', category: 'AI', icon: <Bot size={18} />, color: '#d97706' },
-  { id: 'elevenlabs', name: 'ElevenLabs', description: 'AI voice synthesis & cloning', category: 'AI', icon: <Phone size={18} />, color: '#06b6d4' },
-  { id: 'webhook', name: 'Webhook', description: 'Receive HTTP requests', category: 'Core', icon: <Webhook size={18} />, color: '#f59e0b', badge: 'Popular' },
-  { id: 'http', name: 'HTTP Request', description: 'Make any HTTP/REST call', category: 'Core', icon: <Globe size={18} />, color: '#64748b', badge: 'Popular' },
-  { id: 'supabase', name: 'Supabase', description: 'Open-source Firebase alternative', category: 'Database', icon: <Database size={18} />, color: '#3ecf8e' },
-  { id: 'postgres', name: 'PostgreSQL', description: 'Advanced relational database', category: 'Database', icon: <Database size={18} />, color: '#336791' },
-  { id: 'mysql', name: 'MySQL', description: 'Open-source relational DB', category: 'Database', icon: <Database size={18} />, color: '#00758f' },
-  { id: 'mongodb', name: 'MongoDB', description: 'Document-oriented database', category: 'Database', icon: <Database size={18} />, color: '#47a248' },
-  { id: 'redis', name: 'Redis', description: 'In-memory key-value store', category: 'Database', icon: <Database size={18} />, color: '#dc382d' },
-  { id: 'gmail', name: 'Gmail', description: 'Send & receive emails via Gmail', category: 'Email', icon: <Mail size={18} />, color: '#ea4335', badge: 'Popular' },
-  { id: 'sendgrid', name: 'SendGrid', description: 'Cloud email delivery service', category: 'Email', icon: <Mail size={18} />, color: '#1a82e2' },
-  { id: 'send-email', name: 'Send Email', description: 'Generic SMTP email sender', category: 'Email', icon: <Mail size={18} />, color: '#6366f1' },
-  { id: 'google-sheets', name: 'Google Sheets', description: 'Read/write spreadsheet data', category: 'Productivity', icon: <FileSpreadsheet size={18} />, color: '#34a853', badge: 'Popular' },
-  { id: 'excel', name: 'Microsoft Excel', description: 'Excel 365 spreadsheet ops', category: 'Productivity', icon: <FileSpreadsheet size={18} />, color: '#217346' },
-  { id: 'notion', name: 'Notion', description: 'All-in-one workspace & DB', category: 'Productivity', icon: <LayoutGrid size={18} />, color: '#ffffff' },
-  { id: 'airtable', name: 'Airtable', description: 'Flexible database & spreadsheet', category: 'Productivity', icon: <LayoutGrid size={18} />, color: '#fcb400' },
-  { id: 'google-calendar', name: 'Google Calendar', description: 'Schedule & manage events', category: 'Productivity', icon: <Calendar size={18} />, color: '#4285f4' },
-  { id: 'todoist', name: 'Todoist', description: 'Task management & to-do lists', category: 'Productivity', icon: <CheckCircle2 size={18} />, color: '#db4035' },
-  { id: 'slack', name: 'Slack', description: 'Team messaging & collaboration', category: 'Communication', icon: <MessageSquare size={18} />, color: '#4a154b', badge: 'Popular' },
-  { id: 'telegram', name: 'Telegram', description: 'Messaging & bot automation', category: 'Communication', icon: <MessageSquare size={18} />, color: '#0088cc', badge: 'Popular' },
-  { id: 'discord', name: 'Discord', description: 'Community & team chat', category: 'Communication', icon: <MessageSquare size={18} />, color: '#5865f2' },
-  { id: 'twilio', name: 'Twilio', description: 'SMS, voice & WhatsApp API', category: 'Communication', icon: <Phone size={18} />, color: '#f22f46' },
-  { id: 'whatsapp', name: 'WhatsApp', description: 'WhatsApp Business messaging', category: 'Communication', icon: <MessageSquare size={18} />, color: '#25d366' },
-  { id: 'github', name: 'GitHub', description: 'Code repos & CI/CD automation', category: 'Dev', icon: <GitBranch size={18} />, color: '#ffffff' },
-  { id: 'jira', name: 'Jira Software', description: 'Project & issue tracking', category: 'Dev', icon: <GitBranch size={18} />, color: '#0052cc' },
-  { id: 'clickup', name: 'ClickUp', description: 'All-in-one project management', category: 'Dev', icon: <CheckCircle2 size={18} />, color: '#7b68ee' },
-  { id: 'trello', name: 'Trello', description: 'Visual kanban boards', category: 'Dev', icon: <LayoutGrid size={18} />, color: '#0052cc' },
-  { id: 'aws-s3', name: 'AWS S3', description: 'Scalable object storage', category: 'Cloud', icon: <Database size={18} />, color: '#ff9900' },
-  { id: 'google-drive', name: 'Google Drive', description: 'Cloud file storage & sync', category: 'Cloud', icon: <Database size={18} />, color: '#4285f4' },
-  { id: 'baserow', name: 'Baserow', description: 'Open-source no-code database', category: 'Database', icon: <Database size={18} />, color: '#5190ef' },
-  { id: 'mautic', name: 'Mautic', description: 'Open-source marketing automation', category: 'Marketing', icon: <Zap size={18} />, color: '#4e5e9e' },
-  { id: 'woocommerce', name: 'WooCommerce', description: 'WordPress e-commerce platform', category: 'E-commerce', icon: <Zap size={18} />, color: '#96588a' },
-  { id: 'spreadsheet-file', name: 'Spreadsheet File', description: 'Read/write local spreadsheets', category: 'Productivity', icon: <FileSpreadsheet size={18} />, color: '#22c55e' },
-  { id: 'pushover', name: 'Pushover', description: 'Real-time push notifications', category: 'Communication', icon: <MessageSquare size={18} />, color: '#249df1' },
-  { id: 'openweather', name: 'OpenWeatherMap', description: 'Live weather data & forecasts', category: 'Data', icon: <Globe size={18} />, color: '#eb6e4b' },
-  { id: 'cal-com', name: 'Cal.com', description: 'Open-source scheduling & booking', category: 'Productivity', icon: <Calendar size={18} />, color: '#292929' },
-  { id: 'ms-sql', name: 'Microsoft SQL', description: 'SQL Server database management', category: 'Database', icon: <Database size={18} />, color: '#cc2927' },
-];
-
-const CATEGORIES = ['All', 'AI', 'Core', 'Database', 'Email', 'Productivity', 'Communication', 'Dev', 'Cloud', 'Marketing', 'E-commerce', 'Data'];
-
-// ── n8n API via axios ─────────────────────────────────────────────────────────
-const n8nApi = axios.create({
-  baseURL: import.meta.env.VITE_N8N_WEBHOOK_URL || '',
-  headers: { 'Content-Type': 'application/json' },
-  timeout: 10000,
-});
-
-async function triggerWorkflow(payload: object): Promise<{ success: boolean; message: string }> {
-  const webhookUrl = import.meta.env.VITE_N8N_WEBHOOK_URL;
-  if (!webhookUrl) return { success: false, message: 'n8n webhook URL not configured in .env' };
-  try {
-    await n8nApi.post('', { ...payload, timestamp: new Date().toISOString(), source: 'AIWave Dashboard' });
-    return { success: true, message: 'Workflow triggered successfully' };
-  } catch (err: any) {
-    const msg = err?.response?.data?.message || err?.message || 'Unknown error';
-    return { success: false, message: msg };
-  }
-}
-
-// ── Seed workflows ────────────────────────────────────────────────────────────
-const SEED_WORKFLOWS: Workflow[] = [
-  {
-    id: 'wf-1', name: 'Medical Spa Appointment', active: true, runs: 142, lastRun: '2 mins ago',
-    nodes: [
-      { id: 'n1', integrationId: 'webhook', label: 'Incoming Call', type: 'trigger', x: 60, y: 160, icon: <Webhook size={16} />, color: '#f59e0b' },
-      { id: 'n2', integrationId: 'n8n-ai-agent', label: 'AI Voice Agent', type: 'action', x: 260, y: 160, icon: <Bot size={16} />, color: '#a855f7' },
-      { id: 'n3', integrationId: 'supabase', label: 'Save to DB', type: 'action', x: 460, y: 80, icon: <Database size={16} />, color: '#3ecf8e' },
-      { id: 'n4', integrationId: 'gmail', label: 'Send Confirmation', type: 'action', x: 460, y: 240, icon: <Mail size={16} />, color: '#ea4335' },
-    ],
-  },
-  {
-    id: 'wf-2', name: 'Lead Qualification Flow', active: false, runs: 87, lastRun: '1 hour ago',
-    nodes: [
-      { id: 'n1', integrationId: 'webhook', label: 'New Lead', type: 'trigger', x: 60, y: 160, icon: <Webhook size={16} />, color: '#f59e0b' },
-      { id: 'n2', integrationId: 'openai', label: 'Qualify Lead', type: 'action', x: 260, y: 160, icon: <Bot size={16} />, color: '#10a37f' },
-      { id: 'n3', integrationId: 'slack', label: 'Notify Team', type: 'action', x: 460, y: 160, icon: <MessageSquare size={16} />, color: '#4a154b' },
-    ],
-  },
-];
-
-// ── Integration Card ──────────────────────────────────────────────────────────
-function IntegrationCard({ integration, onAdd }: { integration: Integration; onAdd: (i: Integration) => void }) {
-  return (
-    <button
-      onClick={() => onAdd(integration)}
-      className="group flex items-start gap-3 p-3 rounded-xl border border-white/[0.06] hover:border-white/[0.12] hover:bg-white/[0.03] transition-all text-left w-full"
-    >
-      <div className="flex-shrink-0 w-9 h-9 rounded-xl flex items-center justify-center" style={{ backgroundColor: `${integration.color}18`, border: `1px solid ${integration.color}30` }}>
-        <span style={{ color: integration.color }}>{integration.icon}</span>
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5">
-          <span className="text-[12px] font-semibold text-zinc-200 truncate">{integration.name}</span>
-          {integration.badge && (
-            <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 flex-shrink-0">
-              {integration.badge}
-            </span>
-          )}
-        </div>
-        <p className="text-[10px] text-zinc-500 mt-0.5 truncate">{integration.description}</p>
-      </div>
-      <Plus size={14} className="text-zinc-600 group-hover:text-cyan-400 transition-colors flex-shrink-0 mt-1" />
-    </button>
-  );
-}
-
-// ── Canvas Node ───────────────────────────────────────────────────────────────
-function CanvasNode({ node, onRemove }: { node: WorkflowNode; onRemove: (id: string) => void }) {
-  const typeColors = { trigger: '#f59e0b', action: '#06b6d4', condition: '#a855f7' };
-  const typeBg = { trigger: 'bg-amber-500/10 border-amber-500/20', action: 'bg-cyan-500/10 border-cyan-500/20', condition: 'bg-purple-500/10 border-purple-500/20' };
+function CanvasNode({
+  node, selected, onSelect, onRemove, onConfigure,
+}: {
+  node: WorkflowNode;
+  selected: boolean;
+  onSelect: () => void;
+  onRemove: (id: string) => void;
+  onConfigure: (node: WorkflowNode) => void;
+}) {
+  const integration = getIntegration(node.integrationId);
+  const color = integration?.color ?? '#64748b';
+  const typeLabel = { trigger: 'Trigger', action: 'Action', condition: 'Condition', output: 'Output' }[node.type];
+  const typeDot = { trigger: 'bg-amber-400', action: 'bg-cyan-400', condition: 'bg-purple-400', output: 'bg-emerald-400' }[node.type];
 
   return (
     <motion.div
       drag dragMomentum={false}
-      initial={{ opacity: 0, scale: 0.9 }}
+      onDragEnd={(_e, info) => {
+        // position is managed by parent via onDragEnd — handled in canvas
+        void info;
+      }}
+      initial={{ opacity: 0, scale: 0.85 }}
       animate={{ opacity: 1, scale: 1 }}
-      style={{ left: node.x, top: node.y, position: 'absolute' }}
-      className="w-44 group cursor-move"
+      exit={{ opacity: 0, scale: 0.85 }}
+      style={{ left: node.x, top: node.y, width: NODE_W, position: 'absolute' }}
+      className={cn(
+        'group cursor-pointer select-none',
+        selected && 'z-20'
+      )}
+      // clicking anywhere on the node body opens the config panel
+      onClick={(e) => { e.stopPropagation(); onSelect(); onConfigure(node); }}
     >
-      <div className={cn('bg-[#111118] border rounded-xl p-3 shadow-xl hover:shadow-2xl transition-shadow', typeBg[node.type])}>
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${node.color}20`, border: `1px solid ${node.color}40` }}>
-              <span style={{ color: node.color }}>{node.icon}</span>
+      <div className={cn(
+        'rounded-xl border shadow-lg transition-all duration-150',
+        selected
+          ? 'border-cyan-500/60 shadow-cyan-500/20 shadow-xl ring-1 ring-cyan-500/20'
+          : 'border-white/[0.08] hover:border-white/[0.22] hover:shadow-lg',
+        'bg-[#13182e]'
+      )}>
+        {/* Top accent bar */}
+        <div className="h-0.5 rounded-t-xl" style={{ background: color }} />
+
+        <div className="px-3 py-2.5">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
+                style={{ backgroundColor: `${color}20`, border: `1px solid ${color}35` }}>
+                <span style={{ color }}>{getIcon(integration?.iconName ?? 'Zap')}</span>
+              </div>
+              <span className="text-[11px] font-semibold text-zinc-200 leading-tight truncate max-w-[90px]">
+                {node.label}
+              </span>
             </div>
-            <span className="text-[11px] font-semibold text-zinc-200 leading-tight">{node.label}</span>
+            {/* Only show delete on hover — clicking node body opens config */}
+            <button
+              onClick={(e) => { e.stopPropagation(); onRemove(node.id); }}
+              className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-red-500/10 text-zinc-600 hover:text-red-400 transition-all"
+              title="Remove node"
+            >
+              <X size={11} />
+            </button>
           </div>
-          <button
-            onClick={() => onRemove(node.id)}
-            className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-500/20 text-zinc-600 hover:text-red-400 transition-all"
-          >
-            <X size={11} />
+
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <div className={cn('w-1.5 h-1.5 rounded-full', typeDot)} />
+              <span className="text-[9px] uppercase tracking-wider font-bold text-zinc-500">{typeLabel}</span>
+            </div>
+            {node.configured ? (
+              <span className="flex items-center gap-0.5 text-[9px] text-emerald-400 font-semibold">
+                <CheckCircle2 size={9} /> Connected
+              </span>
+            ) : (
+              <span className="flex items-center gap-0.5 text-[9px] text-amber-400 font-semibold animate-pulse">
+                <Key size={9} /> Setup
+              </span>
+            )}
+          </div>
+
+          {node.operation && (
+            <div className="mt-1.5 px-2 py-0.5 bg-white/[0.03] rounded-md">
+              <span className="text-[9px] text-zinc-500 truncate block">{node.operation}</span>
+            </div>
+          )}
+        </div>
+
+        {/* Output port */}
+        <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 w-3 h-3 rounded-full border-2 border-zinc-600 bg-[#13182e] hover:border-cyan-400 hover:bg-cyan-400/20 transition-colors cursor-crosshair z-10" />
+        {/* Input port */}
+        {node.type !== 'trigger' && (
+          <div className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full border-2 border-zinc-600 bg-[#13182e] hover:border-cyan-400 hover:bg-cyan-400/20 transition-colors cursor-crosshair z-10" />
+        )}
+      </div>
+    </motion.div>
+  );
+}
+
+// ── SVG Edges ─────────────────────────────────────────────────────────────────
+function WorkflowEdges({ nodes, edges }: { nodes: WorkflowNode[]; edges: WorkflowEdge[] }) {
+  const nodeMap = Object.fromEntries(nodes.map((n) => [n.id, n]));
+  return (
+    <svg className="absolute inset-0 w-full h-full pointer-events-none z-0" style={{ overflow: 'visible' }}>
+      <defs>
+        <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#334155" />
+        </marker>
+        <marker id="arrowhead-active" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#06b6d4" />
+        </marker>
+      </defs>
+      {edges.map((edge) => {
+        const src = nodeMap[edge.sourceNodeId];
+        const tgt = nodeMap[edge.targetNodeId];
+        if (!src || !tgt) return null;
+        const x1 = src.x + NODE_W;
+        const y1 = src.y + NODE_H / 2;
+        const x2 = tgt.x;
+        const y2 = tgt.y + NODE_H / 2;
+        const cx = (x1 + x2) / 2;
+        const bothConfigured = src.configured && tgt.configured;
+        return (
+          <g key={edge.id}>
+            <path
+              d={`M${x1},${y1} C${cx},${y1} ${cx},${y2} ${x2},${y2}`}
+              stroke={bothConfigured ? '#06b6d4' : '#1e293b'}
+              strokeWidth={bothConfigured ? 2 : 1.5}
+              fill="none"
+              strokeDasharray={bothConfigured ? 'none' : '5 4'}
+              markerEnd={bothConfigured ? 'url(#arrowhead-active)' : 'url(#arrowhead)'}
+              opacity={0.8}
+            />
+            {bothConfigured && (
+              <circle r="3" fill="#06b6d4" opacity="0.6">
+                <animateMotion dur="2s" repeatCount="indefinite"
+                  path={`M${x1},${y1} C${cx},${y1} ${cx},${y2} ${x2},${y2}`} />
+              </circle>
+            )}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+// ── Integrations Drawer ───────────────────────────────────────────────────────
+function IntegrationsDrawer({
+  onAdd, onClose,
+}: {
+  onAdd: (integrationId: string) => void;
+  onClose: () => void;
+}) {
+  const [search, setSearch] = useState('');
+  const [category, setCategory] = useState('All');
+
+  const filtered = INTEGRATIONS.filter((i) => {
+    const matchCat = category === 'All' || i.category === category;
+    const q = search.toLowerCase();
+    return matchCat && (i.name.toLowerCase().includes(q) || i.description.toLowerCase().includes(q));
+  });
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-stretch justify-end"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ x: '100%' }}
+        animate={{ x: 0 }}
+        exit={{ x: '100%' }}
+        transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+        onClick={(e: React.MouseEvent) => e.stopPropagation()}
+        className="w-[420px] bg-[#0a0f1e] border-l border-white/[0.06] flex flex-col shadow-2xl"
+      >
+        <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-bold text-zinc-100">Add Node</h3>
+            <p className="text-[10px] text-zinc-500 mt-0.5">{INTEGRATIONS.length} integrations available</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/[0.06] text-zinc-500 hover:text-zinc-200 transition-colors">
+            <X size={16} />
           </button>
         </div>
-        <div className="flex items-center justify-between">
-          <span className="text-[9px] uppercase tracking-wider font-bold px-1.5 py-0.5 rounded-full" style={{ color: typeColors[node.type], backgroundColor: `${typeColors[node.type]}15` }}>
-            {node.type}
-          </span>
-          <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+
+        <div className="px-4 pt-3 pb-2">
+          <div className="relative">
+            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600" />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} autoFocus
+              placeholder="Search integrations..."
+              className="w-full bg-white/[0.04] border border-white/[0.08] rounded-xl pl-8 pr-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 outline-none focus:border-cyan-500/40 transition-colors" />
+          </div>
         </div>
-      </div>
+
+        <div className="px-4 pb-2 flex gap-1.5 flex-wrap">
+          {CATEGORIES.map((cat) => (
+            <button key={cat} onClick={() => setCategory(cat)}
+              className={cn(
+                'px-2.5 py-1 rounded-lg text-[10px] font-semibold uppercase tracking-wider transition-all border',
+                category === cat
+                  ? 'bg-cyan-500/15 text-cyan-400 border-cyan-500/25'
+                  : 'text-zinc-500 hover:text-zinc-300 border-transparent hover:border-white/[0.06]'
+              )}>
+              {cat}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-1">
+          {filtered.length === 0 && (
+            <div className="text-center py-10 text-zinc-600 text-sm">No integrations found</div>
+          )}
+          {filtered.map((integration) => (
+            <button key={integration.id} onClick={() => onAdd(integration.id)}
+              className="group w-full flex items-start gap-3 p-3 rounded-xl border border-white/[0.05] hover:border-white/[0.12] hover:bg-white/[0.03] transition-all text-left">
+              <div className="flex-shrink-0 w-9 h-9 rounded-xl flex items-center justify-center"
+                style={{ backgroundColor: `${integration.color}18`, border: `1px solid ${integration.color}30` }}>
+                <span style={{ color: integration.color }}>{getIcon(integration.iconName)}</span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[12px] font-semibold text-zinc-200 truncate">{integration.name}</span>
+                  {integration.badge && (
+                    <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 flex-shrink-0">
+                      {integration.badge}
+                    </span>
+                  )}
+                </div>
+                <p className="text-[10px] text-zinc-500 mt-0.5 truncate">{integration.description}</p>
+                {integration.operations && (
+                  <p className="text-[9px] text-zinc-600 mt-0.5 truncate">{integration.operations.slice(0, 3).join(' · ')}</p>
+                )}
+              </div>
+              <Plus size={14} className="text-zinc-600 group-hover:text-cyan-400 transition-colors flex-shrink-0 mt-1" />
+            </button>
+          ))}
+        </div>
+      </motion.div>
     </motion.div>
   );
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function WorkflowsPage() {
-  const [workflows, setWorkflows] = useState<Workflow[]>(SEED_WORKFLOWS);
-  const [activeWorkflow, setActiveWorkflow] = useState<Workflow>(SEED_WORKFLOWS[0]);
-  const [showIntegrations, setShowIntegrations] = useState(false);
-  const [intSearch, setIntSearch] = useState('');
-  const [intCategory, setIntCategory] = useState('All');
-  const [triggerStatus, setTriggerStatus] = useState<{ success: boolean; message: string } | null>(null);
-  const [triggering, setTriggering] = useState(false);
-  const [nodeCounter, setNodeCounter] = useState(100);
+  const [workflows, setWorkflows] = useState<Workflow[]>(makeSeedWorkflows());
+  const [activeWf, setActiveWf] = useState<Workflow>(makeSeedWorkflows()[0]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [running, setRunning] = useState(false);
+  const [runResult, setRunResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [showDrawer, setShowDrawer] = useState(false);
+  const [configNode, setConfigNode] = useState<WorkflowNode | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [nodeCounter, setNodeCounter] = useState(200);
+  const [wfName, setWfName] = useState(activeWf.name);
+  const [editingName, setEditingName] = useState(false);
+  const canvasRef = useRef<HTMLDivElement>(null);
 
-  // Sync activeWorkflow into workflows list
-  const updateActiveWorkflow = useCallback((updated: Workflow) => {
-    setActiveWorkflow(updated);
-    setWorkflows((prev) => prev.map((w) => (w.id === updated.id ? updated : w)));
+  // Load from Supabase on mount
+  useEffect(() => {
+    fetchWorkflows().then((data) => {
+      if (data.length > 0) {
+        setWorkflows(data);
+        setActiveWf(data[0]);
+        setWfName(data[0].name);
+      }
+      setLoading(false);
+    });
   }, []);
 
-  const handleAddNode = (integration: Integration) => {
+  // Keep wfName in sync when switching workflows
+  useEffect(() => { setWfName(activeWf.name); }, [activeWf.id]);
+
+  const updateActive = useCallback((updated: Workflow) => {
+    setActiveWf(updated);
+    setWorkflows((prev: Workflow[]) => prev.map((w: Workflow) => w.id === updated.id ? updated : w));
+  }, []);
+
+  // ── Add node from drawer ────────────────────────────────────────────────────
+  const handleAddNode = (integrationId: string) => {
+    const integration = getIntegration(integrationId);
+    if (!integration) return;
+    const idx = activeWf.nodes.length;
     const newNode: WorkflowNode = {
       id: `n-${nodeCounter}`,
-      integrationId: integration.id,
+      integrationId,
       label: integration.name,
-      type: activeWorkflow.nodes.length === 0 ? 'trigger' : 'action',
-      x: 60 + (activeWorkflow.nodes.length % 4) * 200,
-      y: 80 + Math.floor(activeWorkflow.nodes.length / 4) * 140,
-      icon: integration.icon,
-      color: integration.color,
+      type: idx === 0 ? 'trigger' : integration.defaultNodeType,
+      x: 80 + (idx % 4) * 220,
+      y: 160 + Math.floor(idx / 4) * 160,
+      credentials: {},
+      configured: false,
+      operation: integration.operations?.[0],
     };
-    setNodeCounter((c) => c + 1);
-    updateActiveWorkflow({ ...activeWorkflow, nodes: [...activeWorkflow.nodes, newNode] });
-    setShowIntegrations(false);
-  };
-
-  const handleRemoveNode = (nodeId: string) => {
-    updateActiveWorkflow({ ...activeWorkflow, nodes: activeWorkflow.nodes.filter((n) => n.id !== nodeId) });
-  };
-
-  const handleNewWorkflow = () => {
-    const wf: Workflow = {
-      id: `wf-${Date.now()}`,
-      name: `New Workflow ${workflows.length + 1}`,
-      nodes: [],
-      active: false,
-      runs: 0,
-    };
-    setWorkflows((prev) => [...prev, wf]);
-    setActiveWorkflow(wf);
-    setShowIntegrations(true);
-  };
-
-  const handleTestTrigger = async () => {
-    setTriggering(true);
-    setTriggerStatus(null);
-    const result = await triggerWorkflow({
-      workflowId: activeWorkflow.id,
-      workflowName: activeWorkflow.name,
-      nodes: activeWorkflow.nodes.map((n) => n.integrationId),
-      eventType: 'test_trigger',
-    });
-    setTriggerStatus(result);
-    setTriggering(false);
-    if (result.success) {
-      updateActiveWorkflow({ ...activeWorkflow, runs: activeWorkflow.runs + 1, lastRun: 'Just now' });
+    // Auto-connect to last node
+    const newEdges: WorkflowEdge[] = [...activeWf.edges];
+    if (activeWf.nodes.length > 0) {
+      const lastNode = activeWf.nodes[activeWf.nodes.length - 1];
+      newEdges.push({ id: `e-${nodeCounter}`, sourceNodeId: lastNode.id, targetNodeId: newNode.id });
     }
-    setTimeout(() => setTriggerStatus(null), 5000);
+    setNodeCounter((c: number) => c + 1);
+    const updated = { ...activeWf, nodes: [...activeWf.nodes, newNode], edges: newEdges };
+    updateActive(updated);
+    setShowDrawer(false);
+    // Immediately open config panel for the new node
+    setConfigNode(newNode);
   };
 
-  const filteredIntegrations = INTEGRATIONS.filter((i) => {
-    const matchCat = intCategory === 'All' || i.category === intCategory;
-    const matchSearch = i.name.toLowerCase().includes(intSearch.toLowerCase()) || i.description.toLowerCase().includes(intSearch.toLowerCase());
-    return matchCat && matchSearch;
-  });
+  // ── Remove node ─────────────────────────────────────────────────────────────
+  const handleRemoveNode = (nodeId: string) => {
+    const updated = {
+      ...activeWf,
+      nodes: activeWf.nodes.filter((n: WorkflowNode) => n.id !== nodeId),
+      edges: activeWf.edges.filter((e: WorkflowEdge) => e.sourceNodeId !== nodeId && e.targetNodeId !== nodeId),
+    };
+    updateActive(updated);
+    if (selectedNodeId === nodeId) setSelectedNodeId(null);
+  };
+
+  // ── Save credentials from config panel ─────────────────────────────────────
+  const handleSaveNodeConfig = (updatedNode: WorkflowNode) => {
+    const updated = {
+      ...activeWf,
+      nodes: activeWf.nodes.map((n: WorkflowNode) => n.id === updatedNode.id ? updatedNode : n),
+    };
+    updateActive(updated);
+    setConfigNode(null);
+  };
+
+  // ── Save workflow to Supabase ───────────────────────────────────────────────
+  const handleSave = async () => {
+    setSaving(true);
+    const toSave = { ...activeWf, name: wfName };
+    const result = await saveWorkflow(toSave);
+    setSaving(false);
+    if (result) {
+      updateActive(result);
+      setSaveMsg({ ok: true, text: 'Workflow saved' });
+    } else {
+      // Optimistic local save
+      updateActive(toSave);
+      setSaveMsg({ ok: true, text: 'Saved locally (Supabase table not set up yet)' });
+    }
+    setTimeout(() => setSaveMsg(null), 3000);
+  };
+
+  // ── Execute workflow ────────────────────────────────────────────────────────
+  const handleRun = async () => {
+    setRunning(true);
+    setRunResult(null);
+    const result = await executeWorkflow(activeWf);
+    setRunning(false);
+    setRunResult(result);
+    if (result.success) {
+      updateActive({ ...activeWf, runs: activeWf.runs + 1, last_run: 'Just now' });
+    }
+    setTimeout(() => setRunResult(null), 5000);
+  };
+
+  // ── New workflow ────────────────────────────────────────────────────────────
+  const handleNewWorkflow = () => {
+    const now = new Date().toISOString();
+    const wf: Workflow = {
+      id: `local-${Date.now()}`,
+      name: `Workflow ${workflows.length + 1}`,
+      nodes: [], edges: [], active: false, runs: 0,
+      created_at: now, updated_at: now,
+    };
+    setWorkflows((prev: Workflow[]) => [wf, ...prev]);
+    setActiveWf(wf);
+    setWfName(wf.name);
+    setShowDrawer(true);
+  };
+
+  // ── Delete workflow ─────────────────────────────────────────────────────────
+  const handleDeleteWorkflow = async (id: string) => {
+    await deleteWorkflow(id);
+    const remaining = workflows.filter((w: Workflow) => w.id !== id);
+    setWorkflows(remaining);
+    if (activeWf.id === id) {
+      const next = remaining[0] ?? makeSeedWorkflows()[0];
+      setActiveWf(next);
+      setWfName(next.name);
+    }
+  };
+
+  const unconfiguredCount = activeWf.nodes.filter((n: WorkflowNode) => !n.configured).length;
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+    <div className="flex flex-col h-full space-y-0 animate-in fade-in duration-500">
+      {/* Top bar */}
+      <div className="flex items-center justify-between mb-5">
         <div>
-          <h1 className="text-3xl font-bold text-white mb-1 tracking-tight">Automation Workflows</h1>
-          <p className="text-slate-400 text-sm">Build n8n-powered automations with 767+ integrations.</p>
+          <h1 className="text-2xl font-bold text-white tracking-tight">Automation Workflows</h1>
+          <p className="text-slate-400 text-sm mt-0.5">n8n-powered automations · {INTEGRATIONS.length}+ integrations</p>
         </div>
         <div className="flex items-center gap-3">
           <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 bg-[#FF6C37]/5 border border-[#FF6C37]/20 rounded-lg text-[10px] font-bold text-[#FF6C37] uppercase tracking-widest">
-            <div className="w-1.5 h-1.5 rounded-full bg-[#FF6C37] animate-pulse" /> n8n Connected
+            <div className="w-1.5 h-1.5 rounded-full bg-[#FF6C37] animate-pulse" /> n8n
           </div>
-          <button
-            onClick={handleNewWorkflow}
-            className="flex items-center gap-2 px-4 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-sm rounded-xl transition-colors shadow-lg shadow-cyan-500/20"
-          >
-            <Plus size={16} /> New Workflow
+          <button onClick={handleNewWorkflow}
+            className="flex items-center gap-2 px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-sm rounded-xl transition-colors shadow-lg shadow-cyan-500/20">
+            <Plus size={15} /> New Workflow
           </button>
         </div>
       </div>
 
-      <div className="flex gap-6 h-[620px]">
-        {/* Workflow list sidebar */}
-        <div className="w-56 flex-shrink-0 space-y-2">
-          <p className="text-[10px] uppercase tracking-widest font-bold text-zinc-600 px-1 mb-3">Your Workflows</p>
-          {workflows.map((wf) => (
-            <button
-              key={wf.id}
-              onClick={() => setActiveWorkflow(wf)}
-              className={cn(
-                'w-full text-left px-3 py-3 rounded-xl border transition-all',
-                activeWorkflow.id === wf.id
-                  ? 'bg-cyan-500/10 border-cyan-500/20 text-zinc-100'
-                  : 'border-white/[0.06] text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.03]'
-              )}
-            >
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-[12px] font-semibold truncate">{wf.name}</span>
-                <div className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0', wf.active ? 'bg-emerald-500' : 'bg-zinc-600')} />
-              </div>
-              <div className="flex items-center gap-2 text-[10px] text-zinc-600">
-                <span>{wf.nodes.length} nodes</span>
-                <span>·</span>
-                <span>{wf.runs} runs</span>
-              </div>
-            </button>
-          ))}
+      <div className="flex gap-5" style={{ height: 'calc(100vh - 220px)', minHeight: 520 }}>
+        {/* Sidebar */}
+        <div className="w-52 flex-shrink-0 flex flex-col gap-2">
+          <p className="text-[10px] uppercase tracking-widest font-bold text-zinc-600 px-1">Workflows</p>
+          <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
+            {loading ? (
+              <div className="flex items-center justify-center py-8"><Loader2 className="animate-spin text-zinc-600" size={18} /></div>
+            ) : (
+              workflows.map((wf: Workflow) => (
+                <div key={wf.id}
+                  className={cn(
+                    'group relative px-3 py-2.5 rounded-xl border cursor-pointer transition-all',
+                    activeWf.id === wf.id
+                      ? 'bg-cyan-500/10 border-cyan-500/20'
+                      : 'border-white/[0.05] hover:border-white/[0.1] hover:bg-white/[0.02]'
+                  )}
+                  onClick={() => { setActiveWf(wf); setWfName(wf.name); setSelectedNodeId(null); }}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-[12px] font-semibold text-zinc-200 truncate max-w-[110px]">{wf.name}</span>
+                    <div className="flex items-center gap-1.5">
+                      <div className={cn('w-1.5 h-1.5 rounded-full', wf.active ? 'bg-emerald-400' : 'bg-zinc-600')} />
+                      <button onClick={(e) => { e.stopPropagation(); handleDeleteWorkflow(wf.id); }}
+                        className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-500/10 text-zinc-600 hover:text-red-400 transition-all">
+                        <Trash2 size={11} />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 mt-1 text-[10px] text-zinc-600">
+                    <span>{wf.nodes.length} nodes</span>
+                    <span>·</span>
+                    <span>{wf.runs} runs</span>
+                  </div>
+                  {wf.last_run && (
+                    <p className="text-[9px] text-zinc-700 mt-0.5 truncate">Last: {wf.last_run}</p>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
         </div>
 
-        {/* Canvas */}
-        <div className="flex-1 relative bg-[#080c18] rounded-2xl border border-white/[0.06] overflow-hidden">
-          {/* Dot grid */}
-          <div className="absolute inset-0 opacity-[0.15]" style={{ backgroundImage: 'radial-gradient(#334155 0.8px, transparent 0.8px)', backgroundSize: '20px 20px' }} />
-
+        {/* Canvas area */}
+        <div className="flex-1 flex flex-col gap-0 min-w-0">
           {/* Canvas toolbar */}
-          <div className="absolute top-4 left-4 right-4 flex items-center justify-between z-10">
-            <div className="flex items-center gap-2">
-              <div className="px-3 py-1.5 bg-[#111118] border border-white/[0.08] rounded-lg text-[11px] font-semibold text-zinc-300 flex items-center gap-2">
-                <div className={cn('w-1.5 h-1.5 rounded-full', activeWorkflow.active ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-600')} />
-                {activeWorkflow.name}
-              </div>
-              {activeWorkflow.lastRun && (
-                <span className="text-[10px] text-zinc-600">Last run: {activeWorkflow.lastRun}</span>
+          <div className="flex items-center justify-between px-4 py-2.5 bg-[#0d1224] border border-white/[0.06] rounded-t-2xl border-b-0">
+            <div className="flex items-center gap-3">
+              {editingName ? (
+                <input
+                  autoFocus
+                  value={wfName}
+                  onChange={(e) => setWfName(e.target.value)}
+                  onBlur={() => { setEditingName(false); updateActive({ ...activeWf, name: wfName }); }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { setEditingName(false); updateActive({ ...activeWf, name: wfName }); } }}
+                  className="bg-transparent border-b border-cyan-500/50 text-sm font-semibold text-zinc-100 outline-none px-1 w-48"
+                />
+              ) : (
+                <button onClick={() => setEditingName(true)}
+                  className="flex items-center gap-2 text-sm font-semibold text-zinc-200 hover:text-white transition-colors group">
+                  <div className={cn('w-2 h-2 rounded-full', activeWf.active ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-600')} />
+                  {wfName}
+                  <span className="text-[10px] text-zinc-600 group-hover:text-zinc-400 transition-colors">click to rename</span>
+                </button>
+              )}
+              {unconfiguredCount > 0 && (
+                <span className="flex items-center gap-1 text-[10px] text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full">
+                  <Key size={10} /> {unconfiguredCount} node{unconfiguredCount > 1 ? 's' : ''} need credentials
+                </span>
               )}
             </div>
             <div className="flex items-center gap-2">
-              <button
-                onClick={() => setShowIntegrations(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-[#111118] border border-white/[0.08] rounded-lg text-[11px] font-semibold text-zinc-400 hover:text-zinc-200 hover:border-white/[0.14] transition-all"
-              >
+              <button onClick={() => setShowDrawer(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-[11px] font-semibold text-zinc-400 hover:text-zinc-200 hover:border-white/[0.14] transition-all">
                 <Plus size={13} /> Add Node
               </button>
               <button
-                onClick={() => updateActiveWorkflow({ ...activeWorkflow, active: !activeWorkflow.active })}
+                onClick={() => updateActive({ ...activeWf, active: !activeWf.active })}
                 className={cn(
                   'px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all border',
-                  activeWorkflow.active
-                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20'
-                    : 'bg-white/[0.04] border-white/[0.08] text-zinc-400 hover:text-zinc-200'
-                )}
-              >
-                {activeWorkflow.active ? 'Active' : 'Inactive'}
+                  activeWf.active
+                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                    : 'bg-white/[0.03] border-white/[0.08] text-zinc-500 hover:text-zinc-300'
+                )}>
+                {activeWf.active ? '● Active' : '○ Inactive'}
+              </button>
+              <div className="w-px h-5 bg-white/[0.06]" />
+              <button onClick={handleSave} disabled={saving}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-[11px] font-semibold text-zinc-400 hover:text-zinc-200 transition-all disabled:opacity-50">
+                {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+                Save
+              </button>
+              <button onClick={handleRun} disabled={running || activeWf.nodes.length === 0}
+                className="flex items-center gap-1.5 px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-lg shadow-emerald-600/20">
+                {running ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} fill="currentColor" />}
+                Execute
               </button>
             </div>
           </div>
 
-          {/* Nodes */}
-          <div className="relative w-full h-full">
-            {/* SVG edges */}
-            <svg className="absolute inset-0 w-full h-full pointer-events-none z-0">
-              {activeWorkflow.nodes.slice(0, -1).map((node, i) => {
-                const next = activeWorkflow.nodes[i + 1];
-                const x1 = node.x + 176; const y1 = node.y + 36;
-                const x2 = next.x; const y2 = next.y + 36;
-                const mx = (x1 + x2) / 2;
-                return (
-                  <path key={`edge-${i}`} d={`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`}
-                    stroke="#1e293b" strokeWidth="2" fill="none" strokeDasharray="4 4" />
-                );
-              })}
-            </svg>
+          {/* Canvas */}
+          <div
+            ref={canvasRef}
+            className="flex-1 relative bg-[#080c18] border border-white/[0.06] rounded-b-2xl overflow-hidden"
+            onClick={() => setSelectedNodeId(null)}
+          >
+            {/* Dot grid */}
+            <div className="absolute inset-0 opacity-[0.12]"
+              style={{ backgroundImage: 'radial-gradient(#334155 0.8px, transparent 0.8px)', backgroundSize: '22px 22px' }} />
 
+            {/* Status toast */}
             <AnimatePresence>
-              {activeWorkflow.nodes.map((node) => (
-                <React.Fragment key={node.id}>
-                  <CanvasNode node={node} onRemove={handleRemoveNode} />
-                </React.Fragment>
-              ))}
-            </AnimatePresence>
-
-            {activeWorkflow.nodes.length === 0 && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 text-center">
-                <div className="w-16 h-16 rounded-2xl bg-white/[0.03] border border-white/[0.06] flex items-center justify-center">
-                  <Zap size={28} className="text-zinc-600" />
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-zinc-400">Empty canvas</p>
-                  <p className="text-[11px] text-zinc-600 mt-1">Click "Add Node" to pick an integration</p>
-                </div>
-                <button onClick={() => setShowIntegrations(true)} className="flex items-center gap-2 px-4 py-2 bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 rounded-xl text-sm font-semibold hover:bg-cyan-500/20 transition-colors">
-                  <Plus size={14} /> Browse 767 Integrations
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Bottom controls */}
-          <div className="absolute bottom-4 right-4 flex items-center gap-3 z-10">
-            <AnimatePresence>
-              {triggerStatus && (
+              {(saveMsg || runResult) && (
                 <motion.div
-                  initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}
+                  initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
                   className={cn(
-                    'flex items-center gap-2 px-3 py-2 rounded-xl text-[11px] font-bold border',
-                    triggerStatus.success
-                      ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
-                      : 'bg-red-500/10 border-red-500/20 text-red-400'
-                  )}
-                >
-                  {triggerStatus.success ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />}
-                  {triggerStatus.message}
+                    'absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-4 py-2 rounded-xl text-[12px] font-bold border shadow-xl',
+                    (saveMsg?.ok || runResult?.success)
+                      ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
+                      : 'bg-red-500/15 border-red-500/30 text-red-300'
+                  )}>
+                  {(saveMsg?.ok || runResult?.success) ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
+                  {saveMsg?.text || runResult?.message}
                 </motion.div>
               )}
             </AnimatePresence>
-            <button
-              onClick={handleTestTrigger}
-              disabled={triggering || activeWorkflow.nodes.length === 0}
-              className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm rounded-xl transition-colors shadow-lg shadow-emerald-600/20 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {triggering ? <Loader2 size={15} className="animate-spin" /> : <Play size={15} fill="currentColor" />}
-              Test Flow
-            </button>
+
+            {/* Empty state */}
+            {activeWf.nodes.length === 0 && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-4">
+                <div className="w-16 h-16 rounded-2xl bg-white/[0.03] border border-white/[0.06] flex items-center justify-center">
+                  <Zap size={28} className="text-zinc-600" />
+                </div>
+                <div className="text-center">
+                  <p className="text-sm font-semibold text-zinc-400">Empty workflow</p>
+                  <p className="text-[11px] text-zinc-600 mt-1">Add a trigger node to get started</p>
+                </div>
+                <button onClick={() => setShowDrawer(true)}
+                  className="flex items-center gap-2 px-4 py-2 bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 rounded-xl text-sm font-semibold hover:bg-cyan-500/20 transition-colors">
+                  <Plus size={14} /> Browse {INTEGRATIONS.length} Integrations
+                </button>
+              </div>
+            )}
+
+            {/* Edges + Nodes */}
+            <div className="absolute inset-0">
+              <WorkflowEdges nodes={activeWf.nodes} edges={activeWf.edges} />
+              <AnimatePresence>
+                {activeWf.nodes.map((node: WorkflowNode) => (
+                  <React.Fragment key={node.id}>
+                    <CanvasNode
+                      node={node}
+                      selected={selectedNodeId === node.id}
+                      onSelect={() => setSelectedNodeId(node.id)}
+                      onRemove={handleRemoveNode}
+                      onConfigure={(n) => setConfigNode(n)}
+                    />
+                  </React.Fragment>
+                ))}
+              </AnimatePresence>
+            </div>
+
+            {/* Bottom-right: node count */}
+            <div className="absolute bottom-3 left-4 flex items-center gap-3 text-[10px] text-zinc-700">
+              <span>{activeWf.nodes.length} nodes</span>
+              <span>·</span>
+              <span>{activeWf.edges.length} connections</span>
+              {activeWf.runs > 0 && <><span>·</span><span>{activeWf.runs} executions</span></>}
+            </div>
           </div>
         </div>
       </div>
 
       {/* Integrations drawer */}
       <AnimatePresence>
-        {showIntegrations && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-end"
-            onClick={() => setShowIntegrations(false)}
-          >
-            <motion.div
-              initial={{ x: '100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '100%' }}
-              transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-              onClick={(e) => e.stopPropagation()}
-              className="w-[480px] h-full bg-[#0a0f1e] border-l border-white/[0.06] flex flex-col shadow-2xl"
-            >
-              {/* Drawer header */}
-              <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-bold text-zinc-100">Add Integration</h3>
-                  <p className="text-[10px] text-zinc-500 mt-0.5">767 integrations available</p>
-                </div>
-                <button onClick={() => setShowIntegrations(false)} className="p-1.5 rounded-lg hover:bg-white/[0.06] text-zinc-500 hover:text-zinc-200 transition-colors">
-                  <X size={16} />
-                </button>
-              </div>
+        {showDrawer && <IntegrationsDrawer onAdd={handleAddNode} onClose={() => setShowDrawer(false)} />}
+      </AnimatePresence>
 
-              {/* Search */}
-              <div className="px-4 pt-4 pb-2">
-                <div className="relative">
-                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600" />
-                  <input
-                    value={intSearch}
-                    onChange={(e) => setIntSearch(e.target.value)}
-                    placeholder="Search integrations..."
-                    className="w-full bg-white/[0.04] border border-white/[0.08] rounded-xl pl-9 pr-3 py-2.5 text-sm text-zinc-200 placeholder:text-zinc-600 outline-none focus:border-cyan-500/40 transition-colors"
-                    autoFocus
-                  />
-                </div>
-              </div>
-
-              {/* Category pills */}
-              <div className="px-4 pb-3 flex gap-1.5 flex-wrap">
-                {CATEGORIES.map((cat) => (
-                  <button
-                    key={cat}
-                    onClick={() => setIntCategory(cat)}
-                    className={cn(
-                      'px-2.5 py-1 rounded-lg text-[10px] font-semibold uppercase tracking-wider transition-all',
-                      intCategory === cat
-                        ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/25'
-                        : 'text-zinc-500 hover:text-zinc-300 border border-transparent hover:border-white/[0.06]'
-                    )}
-                  >
-                    {cat}
-                  </button>
-                ))}
-              </div>
-
-              {/* Integration list */}
-              <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-1">
-                {filteredIntegrations.length === 0 ? (
-                  <div className="text-center py-12 text-zinc-600 text-sm">No integrations found</div>
-                ) : (
-                  filteredIntegrations.map((integration) => (
-                    <React.Fragment key={integration.id}>
-                      <IntegrationCard integration={integration} onAdd={handleAddNode} />
-                    </React.Fragment>
-                  ))
-                )}
-              </div>
-            </motion.div>
-          </motion.div>
+      {/* Node config panel */}
+      <AnimatePresence>
+        {configNode && (
+          <NodeConfigPanel
+            node={configNode}
+            onSave={handleSaveNodeConfig}
+            onClose={() => setConfigNode(null)}
+          />
         )}
       </AnimatePresence>
     </div>
