@@ -25,6 +25,25 @@ export type AuthUser = {
   };
 };
 
+// ── Agents table helpers ──────────────────────────────────────────────────────
+// Run this SQL once in your Supabase SQL editor to create the agents table:
+//
+// create table if not exists agents (
+//   id uuid primary key default gen_random_uuid(),
+//   user_id uuid references auth.users(id) on delete cascade,
+//   name text not null,
+//   industry text not null default 'General',
+//   status text not null default 'Draft',
+//   voice text,
+//   language text default 'en-US',
+//   calls_today integer default 0,
+//   knowledge_pct integer default 0,
+//   created_at timestamptz default now()
+// );
+// alter table agents enable row level security;
+// create policy "Users manage own agents" on agents
+//   for all using (auth.uid() = user_id);
+
 export const saveCallLog = async (
   userId: string,
   data: {
