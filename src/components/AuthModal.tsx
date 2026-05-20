@@ -24,11 +24,23 @@ export default function AuthModal({ isOpen, onClose, onSuccess, defaultView = 's
     const [error, setError] = useState('');
     const [message, setMessage] = useState('');
 
+    const [showResend, setShowResend] = useState(false);
+
     if (!isOpen) return null;
 
     const clearState = () => {
         setError('');
         setMessage('');
+        setShowResend(false);
+    };
+
+    const handleResendConfirmation = async () => {
+        setLoading(true);
+        const { error } = await supabase.auth.resend({ type: 'signup', email });
+        setLoading(false);
+        if (error) { setError(error.message); return; }
+        setMessage('Confirmation email resent — check your inbox.');
+        setShowResend(false);
     };
 
 
@@ -53,7 +65,25 @@ export default function AuthModal({ isOpen, onClose, onSuccess, defaultView = 's
         setLoading(true);
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         setLoading(false);
-        if (error) { setError(error.message); return; }
+        if (error) {
+            // Supabase returns "Invalid login credentials" for both wrong password
+            // AND unconfirmed email — give the user a clearer message.
+            if (
+                error.message.toLowerCase().includes('invalid login credentials') ||
+                error.message.toLowerCase().includes('invalid credentials')
+            ) {
+                setError(
+                    'Incorrect email or password. If you just signed up, check your inbox for a confirmation email first.'
+                );
+                setShowResend(true);
+            } else if (error.message.toLowerCase().includes('email not confirmed')) {
+                setError('Please confirm your email before signing in. Check your inbox for the confirmation link.');
+                setShowResend(true);
+            } else {
+                setError(error.message);
+            }
+            return;
+        }
         onSuccess();
     };
 
@@ -208,8 +238,18 @@ export default function AuthModal({ isOpen, onClose, onSuccess, defaultView = 's
 
                     {/* Feedback messages */}
                     {error && (
-                        <div className="mb-5 px-4 py-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm">
-                            {error}
+                        <div className="mb-5 px-4 py-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm space-y-2">
+                            <p>{error}</p>
+                            {showResend && email && (
+                                <button
+                                    type="button"
+                                    onClick={handleResendConfirmation}
+                                    disabled={loading}
+                                    className="text-xs text-cyan-400 hover:text-cyan-300 underline underline-offset-2 transition-colors"
+                                >
+                                    {loading ? 'Sending…' : 'Resend confirmation email →'}
+                                </button>
+                            )}
                         </div>
                     )}
                     {message && (

@@ -105,7 +105,7 @@ export default function AgentChatPanel({ agent, onClose }: AgentChatPanelProps) 
             history.push({ role: 'user', parts: [{ text }] });
 
             const stream = await ai.models.generateContentStream({
-                model: 'gemini-2.0-flash',
+                model: 'gemini-2.0-flash-001',
                 contents: history,
                 config: {
                     systemInstruction,

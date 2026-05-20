@@ -463,12 +463,13 @@ export default function AgentsPage() {
         <motion.div layout className="grid sm:grid-cols-2 xl:grid-cols-3 gap-4">
           <AnimatePresence mode="popLayout">
             {displayed.map((agent) => (
-              <AgentCard
-                key={agent.id}
-                agent={agent}
-                onDelete={handleDelete}
-                onChat={(a) => setChatAgent(a)}
-              />
+              <React.Fragment key={agent.id}>
+                <AgentCard
+                  agent={agent}
+                  onDelete={handleDelete}
+                  onChat={(a) => setChatAgent(a)}
+                />
+              </React.Fragment>
             ))}
           </AnimatePresence>
 
