@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { X, Mail, Lock, Eye, EyeOff, Loader2, Waves, ArrowLeft, ShieldCheck } from 'lucide-react';
+import { appUrl } from '../lib/appUrl';
 import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
 import { cn } from '../lib/utils';
 
@@ -63,7 +64,7 @@ export default function AuthModal({ isOpen, onClose, onSuccess, defaultView = 's
         const { error } = await getSupabase().auth.signInWithOAuth({
             provider: 'google',
             options: {
-                redirectTo: `${window.location.origin}/dashboard`,
+                redirectTo: appUrl('/auth/callback'),
                 queryParams: { access_type: 'offline', prompt: 'consent' },
             },
         });
@@ -110,7 +111,7 @@ export default function AuthModal({ isOpen, onClose, onSuccess, defaultView = 's
         const { error } = await getSupabase().auth.signUp({
             email,
             password,
-            options: { data: { full_name: fullName }, emailRedirectTo: `${window.location.origin}/dashboard` },
+            options: { data: { full_name: fullName }, emailRedirectTo: appUrl('/auth/callback') },
         });
         setLoading(false);
         if (error) { setError(error.message); return; }
@@ -125,7 +126,7 @@ export default function AuthModal({ isOpen, onClose, onSuccess, defaultView = 's
         setLoading(true);
         const { error } = await getSupabase().auth.signInWithOtp({
             email,
-            options: { emailRedirectTo: `${window.location.origin}/dashboard` },
+            options: { emailRedirectTo: appUrl('/auth/callback') },
         });
         setLoading(false);
         if (error) { setError(error.message); return; }
@@ -170,7 +171,7 @@ export default function AuthModal({ isOpen, onClose, onSuccess, defaultView = 's
         clearState();
         setLoading(true);
         const { error } = await getSupabase().auth.resetPasswordForEmail(email, {
-            redirectTo: `${window.location.origin}/reset-password`,
+            redirectTo: appUrl('/reset-password'),
         });
         setLoading(false);
         if (error) { setError(error.message); return; }

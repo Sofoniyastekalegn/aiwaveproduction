@@ -35,6 +35,7 @@ type AuthView = 'signin' | 'signup' | 'otp' | 'forgot';
 export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
+  const isAuthCallback = location.pathname === '/auth/callback';
   const isDashboard = location.pathname.startsWith('/dashboard');
 
   const [session, setSession] = useState<Session | null>(null);
@@ -59,14 +60,36 @@ export default function App() {
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
-      // After Google OAuth redirect, Supabase fires this — navigate to dashboard
-      if (session && location.pathname === '/') {
-        navigate('/dashboard');
+      if (
+        session &&
+        (location.pathname === '/' ||
+          location.pathname === '/auth/callback' ||
+          window.location.hash.includes('access_token'))
+      ) {
+        window.history.replaceState({}, document.title, '/dashboard');
+        navigate('/dashboard', { replace: true });
       }
     });
 
     return () => subscription.unsubscribe();
-  }, []);
+  }, [navigate, location.pathname]);
+
+  // Handle OAuth return when tokens are in the URL hash (Google sign-in)
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+
+    const hash = window.location.hash;
+    if (!hash.includes('access_token') && !hash.includes('error=')) return;
+
+    getSupabase()
+      .auth.getSession()
+      .then(({ data: { session } }) => {
+        if (session) {
+          window.history.replaceState({}, document.title, '/dashboard');
+          navigate('/dashboard', { replace: true });
+        }
+      });
+  }, [navigate]);
 
   // ── Redirect unauthenticated users away from dashboard ───────────────────
   useEffect(() => {
@@ -103,6 +126,16 @@ export default function App() {
     'User';
 
   const avatarInitial = displayName.charAt(0).toUpperCase();
+
+  // ── OAuth callback (Google redirect lands here) ───────────────────────────
+  if (isAuthCallback) {
+    return (
+      <div className="min-h-screen bg-[#020617] flex flex-col items-center justify-center gap-4">
+        <Loader2 className="animate-spin text-cyan-500 w-8 h-8" />
+        <p className="text-slate-400 text-sm">Completing sign in…</p>
+      </div>
+    );
+  }
 
   // ── Loading splash ────────────────────────────────────────────────────────
   if (authLoading) {

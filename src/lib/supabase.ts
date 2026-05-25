@@ -22,7 +22,14 @@ export function getSupabase(): SupabaseClient {
     );
   }
   if (!client) {
-    client = createClient(supabaseUrl, supabaseAnonKey);
+    client = createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        detectSessionInUrl: true,
+        persistSession: true,
+        autoRefreshToken: true,
+        flowType: 'pkce',
+      },
+    });
   }
   return client;
 }
