@@ -62,7 +62,7 @@ export default function CampaignsPage() {
         const reached = Math.min(c.leads, c.reached + Math.floor(c.leads * 0.15));
         const progress = Math.round((reached / c.leads) * 100);
         const conv = `${Math.min(30, Math.round(progress * 0.2))}%`;
-        return { ...c, reached, progress, conv, last_run: 'Just now' } as Campaign & { last_run?: string };
+        return { ...c, reached, progress, conv };
       })
     );
   };
