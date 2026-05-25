@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { X, Mail, Lock, Eye, EyeOff, Loader2, Waves, ArrowLeft, ShieldCheck } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
 import { cn } from '../lib/utils';
 
 type AuthView = 'signin' | 'signup' | 'otp' | 'forgot';
@@ -34,9 +34,20 @@ export default function AuthModal({ isOpen, onClose, onSuccess, defaultView = 's
         setShowResend(false);
     };
 
+    const requireSupabase = (): boolean => {
+        if (!isSupabaseConfigured) {
+            setError(
+                'Supabase is not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to .env, then restart npm run dev.'
+            );
+            return false;
+        }
+        return true;
+    };
+
     const handleResendConfirmation = async () => {
+        if (!requireSupabase()) return;
         setLoading(true);
-        const { error } = await supabase.auth.resend({ type: 'signup', email });
+        const { error } = await getSupabase().auth.resend({ type: 'signup', email });
         setLoading(false);
         if (error) { setError(error.message); return; }
         setMessage('Confirmation email resent — check your inbox.');
@@ -46,9 +57,10 @@ export default function AuthModal({ isOpen, onClose, onSuccess, defaultView = 's
 
     // ── Google OAuth ──────────────────────────────────────────────────────────
     const handleGoogleSignIn = async () => {
+        if (!requireSupabase()) return;
         clearState();
         setGoogleLoading(true);
-        const { error } = await supabase.auth.signInWithOAuth({
+        const { error } = await getSupabase().auth.signInWithOAuth({
             provider: 'google',
             options: {
                 redirectTo: `${window.location.origin}/dashboard`,
@@ -61,9 +73,10 @@ export default function AuthModal({ isOpen, onClose, onSuccess, defaultView = 's
     // ── Email Sign In ─────────────────────────────────────────────────────────
     const handleSignIn = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (!requireSupabase()) return;
         clearState();
         setLoading(true);
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        const { error } = await getSupabase().auth.signInWithPassword({ email, password });
         setLoading(false);
         if (error) {
             // Supabase returns "Invalid login credentials" for both wrong password
@@ -90,10 +103,11 @@ export default function AuthModal({ isOpen, onClose, onSuccess, defaultView = 's
     // ── Email Sign Up ─────────────────────────────────────────────────────────
     const handleSignUp = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (!requireSupabase()) return;
         clearState();
         if (password.length < 8) { setError('Password must be at least 8 characters.'); return; }
         setLoading(true);
-        const { error } = await supabase.auth.signUp({
+        const { error } = await getSupabase().auth.signUp({
             email,
             password,
             options: { data: { full_name: fullName }, emailRedirectTo: `${window.location.origin}/dashboard` },
@@ -106,9 +120,10 @@ export default function AuthModal({ isOpen, onClose, onSuccess, defaultView = 's
     // ── OTP (Magic Link / Phone) ──────────────────────────────────────────────
     const handleSendOtp = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (!requireSupabase()) return;
         clearState();
         setLoading(true);
-        const { error } = await supabase.auth.signInWithOtp({
+        const { error } = await getSupabase().auth.signInWithOtp({
             email,
             options: { emailRedirectTo: `${window.location.origin}/dashboard` },
         });
@@ -120,11 +135,12 @@ export default function AuthModal({ isOpen, onClose, onSuccess, defaultView = 's
 
     const handleVerifyOtp = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (!requireSupabase()) return;
         clearState();
         const token = otp.join('');
         if (token.length < 6) { setError('Enter the full 6-digit code.'); return; }
         setLoading(true);
-        const { error } = await supabase.auth.verifyOtp({ email, token, type: 'email' });
+        const { error } = await getSupabase().auth.verifyOtp({ email, token, type: 'email' });
         setLoading(false);
         if (error) { setError(error.message); return; }
         onSuccess();
@@ -150,9 +166,10 @@ export default function AuthModal({ isOpen, onClose, onSuccess, defaultView = 's
     // ── Forgot Password ───────────────────────────────────────────────────────
     const handleForgotPassword = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (!requireSupabase()) return;
         clearState();
         setLoading(true);
-        const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        const { error } = await getSupabase().auth.resetPasswordForEmail(email, {
             redirectTo: `${window.location.origin}/reset-password`,
         });
         setLoading(false);

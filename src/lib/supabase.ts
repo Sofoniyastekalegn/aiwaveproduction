@@ -1,19 +1,39 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+const supabaseUrl = String(import.meta.env.VITE_SUPABASE_URL ?? '').trim();
+const supabaseAnonKey = String(import.meta.env.VITE_SUPABASE_ANON_KEY ?? '').trim();
 
-if (!supabaseUrl || !supabaseAnonKey) {
+export const isSupabaseConfigured =
+  supabaseUrl.length > 0 && supabaseAnonKey.length > 0;
+
+if (!isSupabaseConfigured && import.meta.env.DEV) {
   console.error(
     '[AIWave] Supabase credentials missing. ' +
-    'Ensure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set in your .env file.'
+      'Ensure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set in .env, then restart npm run dev.'
   );
 }
 
-export const supabase = createClient(
-  supabaseUrl || '',
-  supabaseAnonKey || ''
-);
+let client: SupabaseClient | null = null;
+
+export function getSupabase(): SupabaseClient {
+  if (!isSupabaseConfigured) {
+    throw new Error(
+      'Supabase is not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to .env and restart the dev server.'
+    );
+  }
+  if (!client) {
+    client = createClient(supabaseUrl, supabaseAnonKey);
+  }
+  return client;
+}
+
+/** Lazy Supabase client — only used when {@link isSupabaseConfigured} is true. */
+export const supabase: SupabaseClient = new Proxy({} as SupabaseClient, {
+  get(_target, prop, receiver) {
+    const value = Reflect.get(getSupabase(), prop, receiver);
+    return typeof value === 'function' ? value.bind(getSupabase()) : value;
+  },
+});
 
 export type AuthUser = {
   id: string;
@@ -25,25 +45,6 @@ export type AuthUser = {
   };
 };
 
-// ── Agents table helpers ──────────────────────────────────────────────────────
-// Run this SQL once in your Supabase SQL editor to create the agents table:
-//
-// create table if not exists agents (
-//   id uuid primary key default gen_random_uuid(),
-//   user_id uuid references auth.users(id) on delete cascade,
-//   name text not null,
-//   industry text not null default 'General',
-//   status text not null default 'Draft',
-//   voice text,
-//   language text default 'en-US',
-//   calls_today integer default 0,
-//   knowledge_pct integer default 0,
-//   created_at timestamptz default now()
-// );
-// alter table agents enable row level security;
-// create policy "Users manage own agents" on agents
-//   for all using (auth.uid() = user_id);
-
 export const saveCallLog = async (
   userId: string,
   data: {
@@ -54,7 +55,7 @@ export const saveCallLog = async (
     transcript: unknown[];
   }
 ) => {
-  const { error } = await supabase.from('calls').insert([
+  const { error } = await getSupabase().from('calls').insert([
     {
       ...data,
       user_id: userId,

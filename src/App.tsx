@@ -1,7 +1,7 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { Session } from '@supabase/supabase-js';
-import { supabase } from './lib/supabase';
+import { getSupabase, isSupabaseConfigured } from './lib/supabase';
 import Navbar from './components/Navbar';
 import AuthModal from './components/AuthModal';
 import Hero from './components/landing/Hero';
@@ -45,6 +45,13 @@ export default function App() {
 
   // ── Listen for Supabase auth state changes ────────────────────────────────
   useEffect(() => {
+    if (!isSupabaseConfigured) {
+      setAuthLoading(false);
+      return;
+    }
+
+    const supabase = getSupabase();
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setAuthLoading(false);
@@ -81,7 +88,9 @@ export default function App() {
   };
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    if (isSupabaseConfigured) {
+      await getSupabase().auth.signOut();
+    }
     setSession(null);
     navigate('/');
   };
