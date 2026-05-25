@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { X, Send, Loader2, Bot, User, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { GoogleGenAI } from '@google/genai';
 import { cn } from '../../lib/utils';
+import { isGeminiConfigured, streamGeminiChat } from '../../services/geminiService';
 import metadata from '../../../metadata.json';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -26,9 +26,6 @@ interface AgentChatPanelProps {
     agent: Agent;
     onClose: () => void;
 }
-
-// ── Gemini client ─────────────────────────────────────────────────────────────
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 
 // Build a system prompt from metadata.json + agent config
 function buildSystemPrompt(agent: Agent): string {
@@ -90,42 +87,29 @@ export default function AgentChatPanel({ agent, onClose }: AgentChatPanelProps) 
         setMessages((prev) => [...prev, { role: 'model', text: '', streaming: true }]);
 
         try {
-            const systemInstruction = buildSystemPrompt(agent);
+            if (!isGeminiConfigured()) {
+                throw new Error('Gemini API key not configured');
+            }
 
-            // Build history for Gemini (exclude the greeting and the streaming placeholder)
+            const systemInstruction = buildSystemPrompt(agent);
             const history = messages
                 .filter((m) => !m.streaming)
-                .slice(1) // skip the greeting
-                .map((m) => ({
-                    role: m.role,
-                    parts: [{ text: m.text }],
-                }));
+                .slice(1)
+                .map((m) => ({ role: m.role, text: m.text }));
 
-            // Add current user message
-            history.push({ role: 'user', parts: [{ text }] });
-
-            const stream = await ai.models.generateContentStream({
-                model: 'gemini-2.0-flash-001',
-                contents: history,
-                config: {
-                    systemInstruction,
-                    temperature: 0.7,
-                    topP: 0.9,
+            const fullText = await streamGeminiChat({
+                systemInstruction,
+                history,
+                userMessage: text,
+                onChunk: (partial) => {
+                    setMessages((prev) => {
+                        const updated = [...prev];
+                        updated[updated.length - 1] = { role: 'model', text: partial, streaming: true };
+                        return updated;
+                    });
                 },
             });
 
-            let fullText = '';
-            for await (const chunk of stream) {
-                const chunkText = chunk.text ?? '';
-                fullText += chunkText;
-                setMessages((prev) => {
-                    const updated = [...prev];
-                    updated[updated.length - 1] = { role: 'model', text: fullText, streaming: true };
-                    return updated;
-                });
-            }
-
-            // Finalize — remove streaming flag
             setMessages((prev) => {
                 const updated = [...prev];
                 updated[updated.length - 1] = { role: 'model', text: fullText };
@@ -133,12 +117,12 @@ export default function AgentChatPanel({ agent, onClose }: AgentChatPanelProps) 
             });
         } catch (err) {
             console.error('[AgentChat] Gemini error:', err);
+            const hint = !isGeminiConfigured()
+                ? 'Add **VITE_GEMINI_API_KEY** to your .env (or Hostinger deployment env vars), then rebuild and redeploy.'
+                : 'Please check your Gemini API key and try again.';
             setMessages((prev) => {
                 const updated = [...prev];
-                updated[updated.length - 1] = {
-                    role: 'model',
-                    text: 'Sorry, I ran into an issue. Please check your Gemini API key and try again.',
-                };
+                updated[updated.length - 1] = { role: 'model', text: `Sorry, I ran into an issue. ${hint}` };
                 return updated;
             });
         } finally {

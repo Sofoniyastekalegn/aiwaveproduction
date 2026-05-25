@@ -78,9 +78,11 @@ export interface ExecuteResult {
 }
 
 export async function executeWorkflow(wf: Workflow): Promise<ExecuteResult> {
-    const webhookUrl = import.meta.env.VITE_N8N_WEBHOOK_URL as string;
+    const webhookUrl =
+        (typeof localStorage !== 'undefined' ? localStorage.getItem('aiwave_n8n_webhook') : null) ||
+        (import.meta.env.VITE_N8N_WEBHOOK_URL as string);
     if (!webhookUrl) {
-        return { success: false, message: 'n8n webhook URL not set in .env (VITE_N8N_WEBHOOK_URL)' };
+        return { success: false, message: 'n8n webhook URL not set — add VITE_N8N_WEBHOOK_URL in .env or Settings → API Keys' };
     }
 
     // Build a structured payload that n8n can route on

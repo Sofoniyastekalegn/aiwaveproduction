@@ -8,6 +8,7 @@ interface ImportMetaEnv {
   readonly VITE_ELEVEN_LABS_API_KEY: string;
   readonly VITE_TWILIO_PHONE_NUMBER: string;
   readonly VITE_CAL_LINK: string;
+  readonly VITE_GEMINI_API_KEY: string;
 }
 
 interface ImportMeta {

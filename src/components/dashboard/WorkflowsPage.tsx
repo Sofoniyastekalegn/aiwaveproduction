@@ -4,11 +4,13 @@ import {
   Plus, Play, Search, X, Zap, Database, Mail, Phone,
   MessageSquare, Globe, Calendar, FileSpreadsheet, Bot,
   Webhook, GitBranch, Loader2, CheckCircle2, AlertCircle,
-  Trash2, Save, LayoutGrid, Mic, Key,
+  Trash2, Save, LayoutGrid, Mic, Key, Upload, Download, FileJson,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { INTEGRATIONS, CATEGORIES, getIntegration } from './workflow/integrations';
 import { fetchWorkflows, saveWorkflow, deleteWorkflow, executeWorkflow } from './workflow/workflowService';
+import { exportToN8n, importFromN8n, SAMPLE_MEDICAL_SPA_N8N } from './workflow/n8nFormat';
+import { downloadJsonFile, readJsonFile } from '../../lib/dashboardStorage';
 import NodeConfigPanel from './workflow/NodeConfigPanel';
 import type { Workflow, WorkflowNode, WorkflowEdge } from './workflow/types';
 
@@ -321,6 +323,7 @@ export default function WorkflowsPage() {
   const [wfName, setWfName] = useState(activeWf.name);
   const [editingName, setEditingName] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   // Load from Supabase on mount
   useEffect(() => {
@@ -439,6 +442,47 @@ export default function WorkflowsPage() {
   };
 
   // ── Delete workflow ─────────────────────────────────────────────────────────
+  const handleExportN8n = () => {
+    const n8nJson = exportToN8n(activeWf);
+    downloadJsonFile(`${activeWf.name.replace(/\s+/g, '-').toLowerCase()}-n8n.json`, n8nJson);
+    setSaveMsg({ ok: true, text: 'n8n workflow downloaded — import this file in n8n or re-upload here' });
+    setTimeout(() => setSaveMsg(null), 4000);
+  };
+
+  const handleDownloadSample = () => {
+    downloadJsonFile('medical-spa-sample-n8n.json', SAMPLE_MEDICAL_SPA_N8N);
+    setSaveMsg({ ok: true, text: 'Sample n8n workflow downloaded' });
+    setTimeout(() => setSaveMsg(null), 3000);
+  };
+
+  const handleImportN8n = async (file: File) => {
+    try {
+      const json = await readJsonFile(file);
+      const imported = importFromN8n(json);
+      if (!imported) {
+        setSaveMsg({ ok: false, text: 'Invalid n8n workflow JSON' });
+        return;
+      }
+      setWorkflows((prev) => [imported, ...prev]);
+      setActiveWf(imported);
+      setWfName(imported.name);
+      setSaveMsg({ ok: true, text: `Imported "${imported.name}" (${imported.nodes.length} nodes)` });
+    } catch {
+      setSaveMsg({ ok: false, text: 'Could not parse JSON file' });
+    }
+    setTimeout(() => setSaveMsg(null), 4000);
+  };
+
+  const handleLoadSampleOnCanvas = () => {
+    const imported = importFromN8n(SAMPLE_MEDICAL_SPA_N8N, `local-${Date.now()}`);
+    if (!imported) return;
+    setWorkflows((prev) => [imported, ...prev]);
+    setActiveWf(imported);
+    setWfName(imported.name);
+    setSaveMsg({ ok: true, text: 'Sample Medical Spa workflow loaded' });
+    setTimeout(() => setSaveMsg(null), 3000);
+  };
+
   const handleDeleteWorkflow = async (id: string) => {
     await deleteWorkflow(id);
     const remaining = workflows.filter((w: Workflow) => w.id !== id);
@@ -541,7 +585,49 @@ export default function WorkflowsPage() {
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap justify-end">
+              <input
+                ref={importInputRef}
+                type="file"
+                accept=".json,application/json"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleImportN8n(file);
+                  e.target.value = '';
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => importInputRef.current?.click()}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-[11px] font-semibold text-zinc-400 hover:text-zinc-200 transition-all"
+                title="Import n8n workflow JSON"
+              >
+                <Upload size={12} /> Import
+              </button>
+              <button
+                type="button"
+                onClick={handleExportN8n}
+                disabled={activeWf.nodes.length === 0}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-[11px] font-semibold text-zinc-400 hover:text-zinc-200 transition-all disabled:opacity-40"
+                title="Export as n8n-compatible JSON"
+              >
+                <Download size={12} /> Export n8n
+              </button>
+              <button
+                type="button"
+                onClick={handleDownloadSample}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-[#FF6C37]/10 border border-[#FF6C37]/25 rounded-lg text-[11px] font-semibold text-[#FF6C37] hover:bg-[#FF6C37]/20 transition-all"
+              >
+                <FileJson size={12} /> Sample JSON
+              </button>
+              <button
+                type="button"
+                onClick={handleLoadSampleOnCanvas}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-[11px] font-semibold text-zinc-400 hover:text-zinc-200 transition-all"
+              >
+                Load Sample
+              </button>
               <button onClick={() => setShowDrawer(true)}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-[11px] font-semibold text-zinc-400 hover:text-zinc-200 hover:border-white/[0.14] transition-all">
                 <Plus size={13} /> Add Node

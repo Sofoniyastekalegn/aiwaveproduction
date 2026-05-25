@@ -1,9 +1,5 @@
-import { GoogleGenAI } from "@google/genai";
-
+import { generateGeminiText } from "./geminiService";
 import { VOICE_IDS } from "./voiceService";
-
-// Platform requirement: Always use process.env.GEMINI_API_KEY
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
 export const industryPersonas = {
   barber: {
@@ -91,16 +87,5 @@ export async function getChatResponse(industry: keyof typeof industryPersonas, m
   // Ensure the LAST message in the array is ALWAYS from the user
   contents.push({ role: "user", parts: [{ text: message }] });
 
-  const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
-    contents,
-    config: {
-      systemInstruction,
-      temperature: 0.7,
-      topP: 0.8,
-      topK: 40,
-    },
-  });
-
-  return response.text || "";
+  return generateGeminiText({ systemInstruction, contents });
 }
